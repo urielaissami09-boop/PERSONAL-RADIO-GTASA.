@@ -25,9 +25,7 @@ jobs:
 
       - name: Download GTA San Andreas Android SDK headers
         run: |
-          curl -fL https://github.com/AndroidModLoader/aml-psdk-gtasa/archive/972d1e60e2f7b04973f11a061a7a7c1b0820de84.zip -o psdk.zip
-          unzip -q psdk.zip
-          mv aml-psdk-gtasa-972d1e60e2f7b04973f11a061a7a7c1b0820de84 aml-psdk-gtasa
+          git clone --depth 1 https://github.com/AndroidModLoader/aml-psdk-gtasa.git aml-psdk-gtasa
           test -f aml-psdk-gtasa/aml-psdk/game_sa/Events.h
 
       - name: Download BASSMod interface header
