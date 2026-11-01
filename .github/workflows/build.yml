@@ -1,0 +1,72 @@
+name: Build PERSONAL RADIO
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Compile PERSONAL RADIO for GTA SA Android
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Download AML mod support sources
+        run: |
+          curl -fL https://github.com/RusJJ/AndroidModLoader/archive/refs/heads/main.zip -o aml.zip
+          unzip -q aml.zip
+          cp -a AndroidModLoader-main/mod ./mod
+
+      - name: Download GTA San Andreas Android SDK headers
+        run: |
+          curl -fL https://github.com/AndroidModLoader/aml-psdk-gtasa/archive/972d1e60e2f7b04973f11a061a7a7c1b0820de84.zip -o psdk.zip
+          unzip -q psdk.zip
+          mv aml-psdk-gtasa-972d1e60e2f7b04973f11a061a7a7c1b0820de84 aml-psdk-gtasa
+          test -f aml-psdk-gtasa/aml-psdk/game_sa/Events.h
+
+      - name: Download BASSMod interface header
+        run: |
+          curl -fL https://raw.githubusercontent.com/AndroidModLoader/BASSMod/main/ibass.h -o ibass.h
+          test -s ibass.h
+
+      - name: Install Android NDK
+        uses: nttld/setup-ndk@v1.2.0
+        with:
+          ndk-version: r24
+          local-cache: true
+
+      - name: Compile native mod
+        run: |
+          ndk-build NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=./Android.mk NDK_APPLICATION_MK=./Application.mk NDK_DEBUG=0 -j2
+
+      - name: Verify and package
+        run: |
+          test -s libs/armeabi-v7a/libPersonalRadio.so
+          mkdir -p release
+          cp libs/armeabi-v7a/libPersonalRadio.so release/
+          cp README_ES.md README_COMPILACION.md release/
+          cat > release/INSTALACION.txt <<'TXT'
+          PERSONAL RADIO 0.3.2
+
+          Copia libPersonalRadio.so en la carpeta mods de AML para GTA SA.
+          Necesita AML y BASSMod compatibles instalados por separado.
+          Este prototipo usa controles táctiles propios y todavía no aparece
+          como emisora dentro del selector original del juego.
+          TXT
+          cd release
+          zip -9 ../PERSONAL_RADIO_ANDROID.zip ./*
+          file ../PERSONAL_RADIO_ANDROID.zip
+
+      - name: Upload compiled mod
+        uses: actions/upload-artifact@v4
+        with:
+          name: PERSONAL_RADIO_ANDROID
+          path: PERSONAL_RADIO_ANDROID.zip
+          if-no-files-found: error
+          retention-days: 30
