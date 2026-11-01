@@ -4,12 +4,15 @@
 
 #include <Events.h>
 #include <engine/RsGlobal.h>
+#include <engine/Font.h>
+#include <engine/Sprite2d.h>
 #include <base/Timer.h>
 #include "ibass.h"
 
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <cstring>
@@ -21,7 +24,7 @@
 #include <thread>
 #include <vector>
 
-MYMODCFG(net.kronos.gtasa.personalradio, PERSONAL RADIO, 0.3.5, Kronos)
+MYMODCFG(net.kronos.gtasa.personalradio, PERSONAL RADIO, 0.3.6, Kronos)
 NEEDGAME(com.rockstargames.gtasa)
 BEGIN_DEPLIST()
     ADD_DEPENDENCY(net.rusjj.basslib)
@@ -42,6 +45,38 @@ namespace PersonalRadio
     static uint32_t stream = 0;
     static float volume = 0.80f;
     static std::string currentTitle = "Biblioteca sin explorar";
+
+    // Interfaz compacta: tres botones en la parte superior, centrados y movibles.
+    static std::mutex uiMutex;
+    static float panelCenterX = -1.0f;
+    static float panelTop = -1.0f;
+    static bool touchTracking = false;
+    static bool touchDragging = false;
+    static float touchStartX = 0.0f;
+    static float touchStartY = 0.0f;
+    static float touchStartCenterX = 0.0f;
+    static float touchStartTop = 0.0f;
+
+    struct PanelLayout
+    {
+        float left, top, right, bottom;
+        float buttonTop, buttonBottom, buttonWidth, buttonGap, buttonStartX;
+        float scale;
+    };
+
+    static void (*DrawRectNative)(const CRect&, const CRGBA&) = nullptr;
+    static void (*FontSetOrientationNative)(unsigned char) = nullptr;
+    static void (*FontSetColorNative)(CRGBA*) = nullptr;
+    static void (*FontSetBackgroundNative)(unsigned char, unsigned char) = nullptr;
+    static void (*FontSetWrapXNative)(float) = nullptr;
+    static void (*FontSetStyleNative)(unsigned char) = nullptr;
+    static void (*FontSetScaleNative)(float) = nullptr;
+    static void (*FontSetProportionalNative)(unsigned char) = nullptr;
+    static void (*FontSetShadowNative)(char) = nullptr;
+    static void (*FontSetEdgeNative)(char) = nullptr;
+    static void (*FontPrintStringNative)(float, float, unsigned short*) = nullptr;
+    static void (*AsciiToGxtCharNative)(const char*, unsigned short*) = nullptr;
+    static void (*RenderFontBufferNative)() = nullptr;
     static constexpr size_t MAX_TRACKS = 10000;
     static constexpr int MAX_DEPTH = 12;
 
@@ -252,14 +287,45 @@ namespace PersonalRadio
         PlayRelativeLocked(1);
     }
 
-    static void TogglePause()
+    static void TogglePlayPause()
     {
         std::lock_guard<std::mutex> lock(stateMutex);
-        if (!enabled || !bass || !stream) return;
+        if (!bass) return;
+
+        // El boton central inicia la radio si estaba apagada y pausa/reanuda si ya sonaba.
+        if (!enabled)
+        {
+            enabled = true;
+            logger->Info("PERSONAL RADIO iniciada.");
+            if (tracks.empty())
+            {
+                currentTitle = "Buscando musica...";
+                RequestScan();
+            }
+            else if (!stream)
+            {
+                PlayRelativeLocked(1);
+            }
+            return;
+        }
+
+        if (!stream)
+        {
+            if (tracks.empty())
+            {
+                currentTitle = "Buscando musica...";
+                RequestScan();
+            }
+            else
+            {
+                PlayRelativeLocked(1);
+            }
+            return;
+        }
+
         if (paused)
         {
-            bass->ChannelPlay(stream, false);
-            paused = false;
+            if (bass->ChannelPlay(stream, false)) paused = false;
         }
         else
         {
@@ -268,19 +334,212 @@ namespace PersonalRadio
         }
     }
 
-    static void HandleTouch(int type, int /*finger*/, int x, int y)
+    static float UiScale(int height)
     {
-        // Evita consultar el vehiculo desde callbacks de entrada o render.
-        // Esa consulta es la principal sospechosa del cierre al subir al auto.
-        if (type != 2) return;
+        float scale = static_cast<float>(height) / 540.0f;
+        if (scale < 0.75f) scale = 0.75f;
+        if (scale > 3.0f) scale = 3.0f;
+        return scale;
+    }
+
+    static void ClampPanelPositionLocked(int width, int height, float scale)
+    {
+        const float panelWidth = 230.0f * scale;
+        const float panelHeight = 60.0f * scale;
+        const float margin = 6.0f * scale;
+
+        const float minCenter = panelWidth * 0.5f + margin;
+        const float maxCenter = static_cast<float>(width) - panelWidth * 0.5f - margin;
+        const float minTop = 12.0f * scale;
+        const float maxTop = static_cast<float>(height) - panelHeight - margin;
+
+        if (panelCenterX < minCenter) panelCenterX = minCenter;
+        if (panelCenterX > maxCenter) panelCenterX = maxCenter;
+        if (panelTop < minTop) panelTop = minTop;
+        if (panelTop > maxTop) panelTop = maxTop;
+    }
+
+    static PanelLayout GetPanelLayout(int width, int height)
+    {
+        PanelLayout layout {};
+        if (width <= 0 || height <= 0) return layout;
+
+        layout.scale = UiScale(height);
+        const float panelWidth = 230.0f * layout.scale;
+        const float panelHeight = 60.0f * layout.scale;
+        layout.buttonWidth = 66.0f * layout.scale;
+        layout.buttonGap = 7.0f * layout.scale;
+        const float buttonHeight = 48.0f * layout.scale;
+
+        {
+            std::lock_guard<std::mutex> lock(uiMutex);
+            if (panelCenterX < 0.0f) panelCenterX = static_cast<float>(width) * 0.5f;
+            if (panelTop < 0.0f) panelTop = static_cast<float>(height) * 0.055f;
+            ClampPanelPositionLocked(width, height, layout.scale);
+            layout.left = panelCenterX - panelWidth * 0.5f;
+            layout.top = panelTop;
+        }
+
+        layout.right = layout.left + panelWidth;
+        layout.bottom = layout.top + panelHeight;
+        layout.buttonTop = layout.top + (panelHeight - buttonHeight) * 0.5f;
+        layout.buttonBottom = layout.buttonTop + buttonHeight;
+        const float buttonsWidth = layout.buttonWidth * 3.0f + layout.buttonGap * 2.0f;
+        layout.buttonStartX = layout.left + (panelWidth - buttonsWidth) * 0.5f;
+        return layout;
+    }
+
+    static int ButtonAt(const PanelLayout& layout, int x, int y)
+    {
+        if (x < layout.left || x > layout.right || y < layout.buttonTop || y > layout.buttonBottom)
+            return -1;
+
+        for (int i = 0; i < 3; ++i)
+        {
+            const float left = layout.buttonStartX + i * (layout.buttonWidth + layout.buttonGap);
+            if (x >= left && x <= left + layout.buttonWidth) return i;
+        }
+        return -1;
+    }
+
+    static void DrawButtonText(const char* value, float x, float y)
+    {
+        unsigned short text[24] {};
+        AsciiToGxtCharNative(value, text);
+        FontPrintStringNative(x, y, text);
+    }
+
+    static void DrawOverlay()
+    {
+        if (!FontSetOrientationNative || !FontSetColorNative || !FontSetBackgroundNative ||
+            !FontSetWrapXNative || !FontSetStyleNative || !FontSetScaleNative ||
+            !FontSetProportionalNative || !FontSetShadowNative || !FontSetEdgeNative ||
+            !FontPrintStringNative || !AsciiToGxtCharNative || !RenderFontBufferNative)
+            return;
+
         const int width = RsGlobal.maximumWidth;
         const int height = RsGlobal.maximumHeight;
-        if (y > height * 0.15f) return;
+        if (width <= 0 || height <= 0) return;
 
-        if (x < width * 0.25f) ToggleRadio();
-        else if (x < width * 0.50f) Previous();
-        else if (x < width * 0.75f) TogglePause();
-        else Next();
+        const PanelLayout layout = GetPanelLayout(width, height);
+        bool radioEnabled = false;
+        bool radioPaused = false;
+        {
+            std::lock_guard<std::mutex> lock(stateMutex);
+            radioEnabled = enabled;
+            radioPaused = paused;
+        }
+
+        // Fondo sobrio y tres zonas táctiles amplias.
+        if (DrawRectNative)
+        {
+            const CRect panelRect(layout.left, layout.top, layout.right, layout.bottom);
+            const CRGBA panelColor(8, 11, 17, 205);
+            DrawRectNative(panelRect, panelColor);
+
+            const CRGBA sideColor(42, 49, 60, 245);
+            const CRGBA centerColor = radioEnabled ? CRGBA(120, 83, 25, 250) : CRGBA(54, 62, 74, 245);
+            for (int i = 0; i < 3; ++i)
+            {
+                const float left = layout.buttonStartX + i * (layout.buttonWidth + layout.buttonGap);
+                const CRect buttonRect(left, layout.buttonTop, left + layout.buttonWidth, layout.buttonBottom);
+                DrawRectNative(buttonRect, i == 1 ? centerColor : sideColor);
+            }
+        }
+
+        FontSetOrientationNative(ALIGN_CENTER);
+        FontSetBackgroundNative(0, 0);
+        FontSetWrapXNative(static_cast<float>(width) - 8.0f * layout.scale);
+        FontSetScaleNative(0.62f * layout.scale);
+        FontSetStyleNative(FONT_SUBTITLES);
+        FontSetProportionalNative(1);
+        FontSetShadowNative(1);
+        FontSetEdgeNative(1);
+
+        CRGBA textColor(255, 255, 255, 255);
+        FontSetColorNative(&textColor);
+
+        const float textY = layout.buttonTop + 11.0f * layout.scale;
+        const float center1 = layout.buttonStartX + layout.buttonWidth * 0.5f;
+        const float center2 = layout.buttonStartX + layout.buttonWidth + layout.buttonGap + layout.buttonWidth * 0.5f;
+        const float center3 = layout.buttonStartX + 2.0f * (layout.buttonWidth + layout.buttonGap) + layout.buttonWidth * 0.5f;
+
+        DrawButtonText("<<", center1, textY);
+        DrawButtonText((radioEnabled && !radioPaused) ? "||" : ">", center2, textY);
+        DrawButtonText(">>", center3, textY);
+        RenderFontBufferNative();
+    }
+
+    static void HandleTouch(int type, int /*finger*/, int x, int y)
+    {
+        // AND_TouchEvent usa los códigos Android: DOWN=0, UP=1, MOVE=2, CANCEL=3.
+        // Solo se aceptan gestos que comiencen dentro del panel visible.
+        const int action = type & 0xFF;
+        const int width = RsGlobal.maximumWidth;
+        const int height = RsGlobal.maximumHeight;
+        if (width <= 0 || height <= 0) return;
+
+        const PanelLayout layout = GetPanelLayout(width, height);
+        const float threshold = 12.0f * layout.scale;
+
+        if (action == 0) // ACTION_DOWN
+        {
+            if (x < layout.left || x > layout.right || y < layout.top || y > layout.bottom)
+                return;
+
+            std::lock_guard<std::mutex> lock(uiMutex);
+            touchTracking = true;
+            touchDragging = false;
+            touchStartX = static_cast<float>(x);
+            touchStartY = static_cast<float>(y);
+            touchStartCenterX = panelCenterX;
+            touchStartTop = panelTop;
+            return;
+        }
+
+        if (action == 2) // ACTION_MOVE
+        {
+            std::lock_guard<std::mutex> lock(uiMutex);
+            if (!touchTracking) return;
+
+            const float dx = static_cast<float>(x) - touchStartX;
+            const float dy = static_cast<float>(y) - touchStartY;
+            if (!touchDragging && (std::fabs(dx) > threshold || std::fabs(dy) > threshold))
+                touchDragging = true;
+
+            if (touchDragging)
+            {
+                panelCenterX = touchStartCenterX + dx;
+                panelTop = touchStartTop + dy;
+                ClampPanelPositionLocked(width, height, layout.scale);
+            }
+            return;
+        }
+
+        if (action == 1) // ACTION_UP
+        {
+            int pressedButton = -1;
+            {
+                std::lock_guard<std::mutex> lock(uiMutex);
+                if (!touchTracking) return;
+                if (!touchDragging) pressedButton = ButtonAt(layout, x, y);
+                touchTracking = false;
+                touchDragging = false;
+            }
+
+            // Ejecutar fuera del mutex visual para evitar bloqueos entre dibujo y audio.
+            if (pressedButton == 0) Previous();
+            else if (pressedButton == 1) TogglePlayPause();
+            else if (pressedButton == 2) Next();
+            return;
+        }
+
+        if (action == 3) // ACTION_CANCEL
+        {
+            std::lock_guard<std::mutex> lock(uiMutex);
+            touchTracking = false;
+            touchDragging = false;
+        }
     }
 
     static void OnFrame()
@@ -310,6 +569,37 @@ ON_MOD_LOAD()
         return;
     }
 
+    void* hGTASA = aml->GetLibHandle("libGTASA.so");
+    if (!hGTASA)
+    {
+        logger->Error("No se pudo obtener el identificador de libGTASA.so.");
+        return;
+    }
+
+    // Resolver las funciones nativas mediante simbolos. Las llamadas se omiten si falta alguna.
+    PersonalRadio::DrawRectNative = reinterpret_cast<void (*)(const CRect&, const CRGBA&)>(
+        aml->GetSym(hGTASA, "_ZN9CSprite2d8DrawRectERK5CRectRK5CRGBA"));
+    PersonalRadio::FontSetOrientationNative = reinterpret_cast<void (*)(unsigned char)>(aml->GetSym(hGTASA, "_ZN5CFont14SetOrientationEh"));
+    PersonalRadio::FontSetColorNative = reinterpret_cast<void (*)(CRGBA*)>(aml->GetSym(hGTASA, "_ZN5CFont8SetColorE5CRGBA"));
+    PersonalRadio::FontSetBackgroundNative = reinterpret_cast<void (*)(unsigned char, unsigned char)>(aml->GetSym(hGTASA, "_ZN5CFont13SetBackgroundEhh"));
+    PersonalRadio::FontSetWrapXNative = reinterpret_cast<void (*)(float)>(aml->GetSym(hGTASA, "_ZN5CFont8SetWrapxEf"));
+    PersonalRadio::FontSetStyleNative = reinterpret_cast<void (*)(unsigned char)>(aml->GetSym(hGTASA, "_ZN5CFont12SetFontStyleEh"));
+    PersonalRadio::FontSetScaleNative = reinterpret_cast<void (*)(float)>(aml->GetSym(hGTASA, "_ZN5CFont8SetScaleEf"));
+    PersonalRadio::FontSetProportionalNative = reinterpret_cast<void (*)(unsigned char)>(aml->GetSym(hGTASA, "_ZN5CFont15SetProportionalEh"));
+    PersonalRadio::FontSetShadowNative = reinterpret_cast<void (*)(char)>(aml->GetSym(hGTASA, "_ZN5CFont21SetDropShadowPositionEa"));
+    PersonalRadio::FontSetEdgeNative = reinterpret_cast<void (*)(char)>(aml->GetSym(hGTASA, "_ZN5CFont7SetEdgeEa"));
+    PersonalRadio::FontPrintStringNative = reinterpret_cast<void (*)(float, float, unsigned short*)>(aml->GetSym(hGTASA, "_ZN5CFont11PrintStringEffPt"));
+    PersonalRadio::AsciiToGxtCharNative = reinterpret_cast<void (*)(const char*, unsigned short*)>(aml->GetSym(hGTASA, "_Z14AsciiToGxtCharPKcPt"));
+    PersonalRadio::RenderFontBufferNative = reinterpret_cast<void (*)()>(aml->GetSym(hGTASA, "_ZN5CFont16RenderFontBufferEv"));
+
+    const bool fontReady = PersonalRadio::FontSetOrientationNative &&
+        PersonalRadio::FontSetColorNative && PersonalRadio::FontSetBackgroundNative &&
+        PersonalRadio::FontSetWrapXNative && PersonalRadio::FontSetStyleNative &&
+        PersonalRadio::FontSetScaleNative && PersonalRadio::FontSetProportionalNative &&
+        PersonalRadio::FontSetShadowNative && PersonalRadio::FontSetEdgeNative &&
+        PersonalRadio::FontPrintStringNative && PersonalRadio::AsciiToGxtCharNative &&
+        PersonalRadio::RenderFontBufferNative;
+
     PersonalRadio::bass = static_cast<IBASS*>(GetInterface("BASS"));
     if (!PersonalRadio::bass)
     {
@@ -321,13 +611,23 @@ ON_MOD_LOAD()
     if (PersonalRadio::volume < 0.0f) PersonalRadio::volume = 0.0f;
     if (PersonalRadio::volume > 1.0f) PersonalRadio::volume = 1.0f;
 
+    if (fontReady)
+    {
+        Events::drawHudEvent.after += []() { PersonalRadio::DrawOverlay(); };
+        logger->Info("Panel visible activado: tres botones en la parte superior, arrastrable.");
+    }
+    else
+    {
+        logger->Error("No se resolvieron las funciones de texto; controles visuales desactivados.");
+    }
+
     Events::touchScreenEvent.after += [](int type, int finger, int x, int y)
     {
         PersonalRadio::HandleTouch(type, finger, x, y);
     };
     Events::processScriptsEvent += []() { PersonalRadio::OnFrame(); };
 
-    logger->Info("PERSONAL RADIO 0.3.5 cargado. Render HUD desactivado por compatibilidad; controles tactiles superiores activos.");
+    logger->Info("PERSONAL RADIO 0.3.6 cargado. Controles visibles superiores y arrastrables.");
 }
 
 ON_MOD_UNLOAD()
