@@ -24,7 +24,7 @@
 #include <thread>
 #include <vector>
 
-MYMODCFG(net.kronos.gtasa.personalradio, PERSONAL RADIO, 0.3.6, Kronos)
+MYMODCFG(net.kronos.gtasa.personalradio, PERSONAL RADIO, 0.3.7, Kronos)
 NEEDGAME(com.rockstargames.gtasa)
 BEGIN_DEPLIST()
     ADD_DEPENDENCY(net.rusjj.basslib)
@@ -470,71 +470,90 @@ namespace PersonalRadio
         RenderFontBufferNative();
     }
 
-    static void HandleTouch(int type, int /*finger*/, int x, int y)
+    static std::atomic<long long> lastButtonPressMs{0};
+    static std::atomic<int> lastButtonFinger{-999};
+
+    static long long TouchClockMs()
     {
-        // AND_TouchEvent usa los códigos Android: DOWN=0, UP=1, MOVE=2, CANCEL=3.
-        // Solo se aceptan gestos que comiencen dentro del panel visible.
-        const int action = type & 0xFF;
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    static void HandleTouch(int type, int finger, int x, int y)
+    {
+        // El evento AML entrega acciones táctiles, pero su orden/codificación
+        // puede variar entre ports. Activamos una sola vez al primer evento
+        // que entre en un botón y aplicamos antirrebote por dedo.
         const int width = RsGlobal.maximumWidth;
         const int height = RsGlobal.maximumHeight;
         if (width <= 0 || height <= 0) return;
 
         const PanelLayout layout = GetPanelLayout(width, height);
-        const float threshold = 12.0f * layout.scale;
+        const int action = type & 0xFF;
 
-        if (action == 0) // ACTION_DOWN
+        // Liberar el bloqueo al terminar/cancelar el gesto.
+        if (action == 1 || action == 3)
         {
-            if (x < layout.left || x > layout.right || y < layout.top || y > layout.bottom)
-                return;
-
-            std::lock_guard<std::mutex> lock(uiMutex);
-            touchTracking = true;
-            touchDragging = false;
-            touchStartX = static_cast<float>(x);
-            touchStartY = static_cast<float>(y);
-            touchStartCenterX = panelCenterX;
-            touchStartTop = panelTop;
-            return;
+            int expected = finger;
+            lastButtonFinger.compare_exchange_strong(expected, -999);
         }
 
-        if (action == 2) // ACTION_MOVE
+        int pressedButton = ButtonAt(layout, x, y);
+        if (pressedButton >= 0)
         {
-            std::lock_guard<std::mutex> lock(uiMutex);
-            if (!touchTracking) return;
+            const long long now = TouchClockMs();
+            const long long previous = lastButtonPressMs.load();
+            const int activeFinger = lastButtonFinger.load();
 
-            const float dx = static_cast<float>(x) - touchStartX;
-            const float dy = static_cast<float>(y) - touchStartY;
-            if (!touchDragging && (std::fabs(dx) > threshold || std::fabs(dy) > threshold))
-                touchDragging = true;
-
-            if (touchDragging)
+            // Una pulsación se dispara una vez, aunque el port envíe MOVE
+            // antes que DOWN. Se evita repetir mientras el mismo dedo sigue
+            // sobre el botón.
+            if (activeFinger != finger && now - previous > 220)
             {
-                panelCenterX = touchStartCenterX + dx;
-                panelTop = touchStartTop + dy;
-                ClampPanelPositionLocked(width, height, layout.scale);
+                int expected = activeFinger;
+                if (lastButtonFinger.compare_exchange_strong(expected, finger))
+                {
+                    lastButtonPressMs.store(now);
+                    if (pressedButton == 0) Previous();
+                    else if (pressedButton == 1) TogglePlayPause();
+                    else if (pressedButton == 2) Next();
+                }
             }
-            return;
         }
 
-        if (action == 1) // ACTION_UP
+        // Arrastrar el panel desde la franja superior, sin interferir
+        // con los tres botones grandes.
+        if (action == 0)
         {
-            int pressedButton = -1;
+            const float headerBottom = layout.top + 7.0f * layout.scale;
+            if (x >= layout.left && x <= layout.right && y >= layout.top && y <= headerBottom)
             {
                 std::lock_guard<std::mutex> lock(uiMutex);
-                if (!touchTracking) return;
-                if (!touchDragging) pressedButton = ButtonAt(layout, x, y);
-                touchTracking = false;
+                touchTracking = true;
                 touchDragging = false;
+                touchStartX = static_cast<float>(x);
+                touchStartY = static_cast<float>(y);
+                touchStartCenterX = panelCenterX;
+                touchStartTop = panelTop;
             }
-
-            // Ejecutar fuera del mutex visual para evitar bloqueos entre dibujo y audio.
-            if (pressedButton == 0) Previous();
-            else if (pressedButton == 1) TogglePlayPause();
-            else if (pressedButton == 2) Next();
-            return;
         }
-
-        if (action == 3) // ACTION_CANCEL
+        else if (action == 2)
+        {
+            std::lock_guard<std::mutex> lock(uiMutex);
+            if (touchTracking)
+            {
+                const float dx = static_cast<float>(x) - touchStartX;
+                const float dy = static_cast<float>(y) - touchStartY;
+                if (std::fabs(dx) > 3.0f || std::fabs(dy) > 3.0f)
+                {
+                    panelCenterX = touchStartCenterX + dx;
+                    panelTop = touchStartTop + dy;
+                    ClampPanelPositionLocked(width, height, layout.scale);
+                    touchDragging = true;
+                }
+            }
+        }
+        else if (action == 1 || action == 3)
         {
             std::lock_guard<std::mutex> lock(uiMutex);
             touchTracking = false;
@@ -627,7 +646,7 @@ ON_MOD_LOAD()
     };
     Events::processScriptsEvent += []() { PersonalRadio::OnFrame(); };
 
-    logger->Info("PERSONAL RADIO 0.3.6 cargado. Controles visibles superiores y arrastrables.");
+    logger->Info("PERSONAL RADIO 0.3.7 cargado. Panel renovado y detección táctil tolerante.");
 }
 
 ON_MOD_UNLOAD()
