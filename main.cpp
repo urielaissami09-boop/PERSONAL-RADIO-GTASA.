@@ -3,10 +3,8 @@
 #include <mod/config.h>
 
 #include <Events.h>
-#include <engine/Font.h>
 #include <engine/RsGlobal.h>
 #include <base/Timer.h>
-#include <entity/PlayerPed.h>
 #include "ibass.h"
 
 #include <algorithm>
@@ -23,7 +21,7 @@
 #include <thread>
 #include <vector>
 
-MYMODCFG(net.kronos.gtasa.personalradio, PERSONAL RADIO, 0.3.2, Kronos)
+MYMODCFG(net.kronos.gtasa.personalradio, PERSONAL RADIO, 0.3.3, Kronos)
 NEEDGAME(com.rockstargames.gtasa)
 BEGIN_DEPLIST()
     ADD_DEPENDENCY(net.rusjj.basslib)
@@ -270,34 +268,11 @@ namespace PersonalRadio
         }
     }
 
-    static void DrawOverlay()
-    {
-        if (!FindPlayerVehicle(-1, false)) return;
-
-        char line[256];
-        {
-            std::lock_guard<std::mutex> lock(stateMutex);
-            std::snprintf(line, sizeof(line), "PERSONAL RADIO [%s]  |  <<  PREV  |  %s  |  NEXT  >>\n%s",
-                enabled ? "ON" : "OFF", paused ? "PLAY" : "PAUSE", currentTitle.c_str());
-        }
-
-        GxtChar text[256]{};
-        AsciiToGxtChar(line, text);
-        const float scale = static_cast<float>(RsGlobal.maximumHeight) / 540.0f;
-        CFont::SetScale(scale * 0.78f);
-        CFont::SetColor(CRGBA(255, 255, 255, 255));
-        CFont::SetFontStyle(FO_FONT_STYLE_HEADING);
-        CFont::SetEdge(1);
-        CFont::SetOrientation(ALIGN_CENTER);
-        CFont::SetProportional(1);
-        CFont::SetBackground(0, 1);
-        CFont::PrintString(0.5f * RsGlobal.maximumWidth, 0.035f * RsGlobal.maximumHeight, text);
-        CFont::RenderFontBuffer();
-    }
-
     static void HandleTouch(int type, int /*finger*/, int x, int y)
     {
-        if (type != 2 || !FindPlayerVehicle(-1, false)) return;
+        // Evita consultar el vehiculo desde callbacks de entrada o render.
+        // Esa consulta es la principal sospechosa del cierre al subir al auto.
+        if (type != 2) return;
         const int width = RsGlobal.maximumWidth;
         const int height = RsGlobal.maximumHeight;
         if (y > height * 0.15f) return;
@@ -310,18 +285,8 @@ namespace PersonalRadio
 
     static void OnFrame()
     {
-        if (!FindPlayerVehicle(-1, false))
-        {
-            std::lock_guard<std::mutex> lock(stateMutex);
-            if (enabled)
-            {
-                enabled = false;
-                StopStreamLocked();
-                currentTitle = "Radio apagada";
-            }
-            return;
-        }
-
+        // 0.3.3: sin consultas nativas al vehiculo ni dibujo CFont por frame.
+        // La reproduccion y el avance automatico siguen funcionando.
         std::lock_guard<std::mutex> lock(stateMutex);
         if (enabled && bass && stream && !paused && !CTimer::IsPaused())
         {
@@ -356,14 +321,13 @@ ON_MOD_LOAD()
     if (PersonalRadio::volume < 0.0f) PersonalRadio::volume = 0.0f;
     if (PersonalRadio::volume > 1.0f) PersonalRadio::volume = 1.0f;
 
-    Events::drawHudEvent.after += []() { PersonalRadio::DrawOverlay(); };
     Events::touchScreenEvent.after += [](int type, int finger, int x, int y)
     {
         PersonalRadio::HandleTouch(type, finger, x, y);
     };
     Events::processScriptsEvent += []() { PersonalRadio::OnFrame(); };
 
-    logger->Info("PERSONAL RADIO 0.3.2 cargado. Usa los cuatro sectores del borde superior mientras conduces.");
+    logger->Info("PERSONAL RADIO 0.3.3 cargado. Controles tactiles en los cuatro sectores superiores.");
 }
 
 ON_MOD_UNLOAD()
