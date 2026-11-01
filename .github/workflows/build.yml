@@ -28,9 +28,14 @@ jobs:
           git clone --depth 1 https://github.com/AndroidModLoader/aml-psdk-gtasa.git aml-psdk-gtasa
           test -f aml-psdk-gtasa/aml-psdk/game_sa/Events.h
 
-      - name: Download BASSMod interface header
+      - name: Download BASSMod source
         run: |
-          curl -fL https://raw.githubusercontent.com/AndroidModLoader/BASSMod/main/ibass.h -o ibass.h
+          curl -fL https://github.com/AndroidModLoader/BASSMod/archive/refs/heads/main.zip -o bassmod.zip
+          unzip -q bassmod.zip
+          mv BASSMod-main BASSMod
+          cp BASSMod/ibass.h ./ibass.h
+          cp -a AndroidModLoader-main/mod BASSMod/mod
+          sed -i 's/^APP_ABI :=.*/APP_ABI := armeabi-v7a/' BASSMod/Application.mk
           test -s ibass.h
 
       - name: Install Android NDK
@@ -39,7 +44,13 @@ jobs:
           ndk-version: r24
           local-cache: true
 
-      - name: Compile native mod
+      - name: Compile matching BASSMod dependency
+        run: |
+          cd BASSMod
+          ndk-build NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=./Android.mk NDK_APPLICATION_MK=./Application.mk NDK_DEBUG=0 -j2
+          test -s libs/armeabi-v7a/libBASSMod.so
+
+      - name: Compile PERSONAL RADIO
         run: |
           ndk-build NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=./Android.mk NDK_APPLICATION_MK=./Application.mk NDK_DEBUG=0 -j2
 
@@ -48,13 +59,14 @@ jobs:
           test -s libs/armeabi-v7a/libPersonalRadio.so
           mkdir -p release
           cp libs/armeabi-v7a/libPersonalRadio.so release/
+          cp BASSMod/libs/armeabi-v7a/libBASSMod.so release/
           cp README_ES.md README_COMPILACION.md release/
           cat > release/INSTALACION.txt <<'TXT'
           PERSONAL RADIO 0.3.2
 
-          Copia libPersonalRadio.so en la carpeta mods de AML para GTA SA.
-          Necesita AML y BASSMod compatibles instalados por separado.
-          Este prototipo usa controles táctiles propios y todavía no aparece
+          Copia libPersonalRadio.so y libBASSMod.so directamente en la carpeta
+          mods de AML para GTA San Andreas. AML debe estar instalado y activo.
+          Este prototipo usa controles tactiles propios y todavia no aparece
           como emisora dentro del selector original del juego.
           TXT
           cd release
