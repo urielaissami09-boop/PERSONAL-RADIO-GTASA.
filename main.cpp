@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cctype>
 #include <cmath>
+#include <chrono>
 #include <cstdio>
 #include <ctime>
 #include <cstring>
@@ -344,8 +345,8 @@ namespace PersonalRadio
 
     static void ClampPanelPositionLocked(int width, int height, float scale)
     {
-        const float panelWidth = 230.0f * scale;
-        const float panelHeight = 60.0f * scale;
+        const float panelWidth = 250.0f * scale;
+        const float panelHeight = 76.0f * scale;
         const float margin = 6.0f * scale;
 
         const float minCenter = panelWidth * 0.5f + margin;
@@ -365,11 +366,11 @@ namespace PersonalRadio
         if (width <= 0 || height <= 0) return layout;
 
         layout.scale = UiScale(height);
-        const float panelWidth = 230.0f * layout.scale;
-        const float panelHeight = 60.0f * layout.scale;
-        layout.buttonWidth = 66.0f * layout.scale;
-        layout.buttonGap = 7.0f * layout.scale;
-        const float buttonHeight = 48.0f * layout.scale;
+        const float panelWidth = 250.0f * layout.scale;
+        const float panelHeight = 76.0f * layout.scale;
+        layout.buttonWidth = 72.0f * layout.scale;
+        layout.buttonGap = 6.0f * layout.scale;
+        const float buttonHeight = 46.0f * layout.scale;
 
         {
             std::lock_guard<std::mutex> lock(uiMutex);
@@ -382,7 +383,7 @@ namespace PersonalRadio
 
         layout.right = layout.left + panelWidth;
         layout.bottom = layout.top + panelHeight;
-        layout.buttonTop = layout.top + (panelHeight - buttonHeight) * 0.5f;
+        layout.buttonTop = layout.top + 22.0f * layout.scale;
         layout.buttonBottom = layout.buttonTop + buttonHeight;
         const float buttonsWidth = layout.buttonWidth * 3.0f + layout.buttonGap * 2.0f;
         layout.buttonStartX = layout.left + (panelWidth - buttonsWidth) * 0.5f;
@@ -434,11 +435,14 @@ namespace PersonalRadio
         if (DrawRectNative)
         {
             const CRect panelRect(layout.left, layout.top, layout.right, layout.bottom);
-            const CRGBA panelColor(8, 11, 17, 205);
-            DrawRectNative(panelRect, panelColor);
+            DrawRectNative(panelRect, CRGBA(10, 14, 23, 225));
+            const CRect headerRect(layout.left, layout.top, layout.right, layout.top + 18.0f * layout.scale);
+            DrawRectNative(headerRect, CRGBA(25, 42, 62, 250));
 
-            const CRGBA sideColor(42, 49, 60, 245);
-            const CRGBA centerColor = radioEnabled ? CRGBA(120, 83, 25, 250) : CRGBA(54, 62, 74, 245);
+            const CRGBA sideColor(43, 57, 76, 250);
+            const CRGBA centerColor = radioEnabled
+                ? (radioPaused ? CRGBA(117, 83, 30, 255) : CRGBA(24, 112, 79, 255))
+                : CRGBA(48, 69, 91, 255);
             for (int i = 0; i < 3; ++i)
             {
                 const float left = layout.buttonStartX + i * (layout.buttonWidth + layout.buttonGap);
@@ -450,7 +454,7 @@ namespace PersonalRadio
         FontSetOrientationNative(ALIGN_CENTER);
         FontSetBackgroundNative(0, 0);
         FontSetWrapXNative(static_cast<float>(width) - 8.0f * layout.scale);
-        FontSetScaleNative(0.62f * layout.scale);
+        FontSetScaleNative(0.48f * layout.scale);
         FontSetStyleNative(FONT_SUBTITLES);
         FontSetProportionalNative(1);
         FontSetShadowNative(1);
@@ -464,9 +468,9 @@ namespace PersonalRadio
         const float center2 = layout.buttonStartX + layout.buttonWidth + layout.buttonGap + layout.buttonWidth * 0.5f;
         const float center3 = layout.buttonStartX + 2.0f * (layout.buttonWidth + layout.buttonGap) + layout.buttonWidth * 0.5f;
 
-        DrawButtonText("<<", center1, textY);
+        DrawButtonText("ANT", center1, textY);
         DrawButtonText((radioEnabled && !radioPaused) ? "||" : ">", center2, textY);
-        DrawButtonText(">>", center3, textY);
+        DrawButtonText("SIG", center3, textY);
         RenderFontBufferNative();
     }
 
@@ -525,7 +529,7 @@ namespace PersonalRadio
         // con los tres botones grandes.
         if (action == 0)
         {
-            const float headerBottom = layout.top + 7.0f * layout.scale;
+            const float headerBottom = layout.top + 19.0f * layout.scale;
             if (x >= layout.left && x <= layout.right && y >= layout.top && y <= headerBottom)
             {
                 std::lock_guard<std::mutex> lock(uiMutex);
