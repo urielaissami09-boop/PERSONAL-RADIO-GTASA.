@@ -27,6 +27,8 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/AndroidModLoader/aml-psdk-gtasa.git aml-psdk-gtasa
           test -f aml-psdk-gtasa/aml-psdk/game_sa/Events.h
+          test -f aml-psdk-gtasa/aml-psdk/game_sa/engine/Font.h
+          test -f aml-psdk-gtasa/aml-psdk/game_sa/engine/Sprite2d.h
 
       - name: Download BASSMod source
         run: |
@@ -62,12 +64,28 @@ jobs:
           cp BASSMod/libs/armeabi-v7a/libBASSMod.so release/
           cp README_ES.md README_COMPILACION.md release/
           cat > release/INSTALACION.txt <<'TXT'
-          PERSONAL RADIO 0.3.2
+          PERSONAL RADIO 0.3.6
 
-          Copia libPersonalRadio.so y libBASSMod.so directamente en la carpeta
-          mods de AML para GTA San Andreas. AML debe estar instalado y activo.
-          Este prototipo usa controles tactiles propios y todavia no aparece
-          como emisora dentro del selector original del juego.
+          INSTALA SOLO ESTOS DOS ARCHIVOS:
+          - libPersonalRadio.so
+          - libBASSMod.so
+
+          Copialos directamente en la carpeta mods de AML para GTA San Andreas.
+          No copies los README ni este documento dentro de mods.
+
+          El panel aparece arriba, en el centro. Tiene tres botones:
+          << pista anterior, > reproducir/reanudar, || pausar, >> pista siguiente.
+          Puedes arrastrar el panel con el dedo para cambiarlo de lugar.
+          Los toques fuera del panel no deben activar la radio.
+
+          Todavia no aparece en el selector original de emisoras.
+          AML debe estar instalado y activo.
+          TXT
+          cat > release/VERSION.txt <<'TXT'
+          PERSONAL RADIO 0.3.6
+          GTA San Andreas Android 2.00
+          ABI: armeabi-v7a
+          Build: GitHub Actions
           TXT
           cd release
           zip -9 ../PERSONAL_RADIO_ANDROID.zip ./*
