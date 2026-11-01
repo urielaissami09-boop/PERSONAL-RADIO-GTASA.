@@ -18,12 +18,7 @@ Android 11 puede restringir el acceso directo a carpetas de música. El escáner
 
 ## Dependencias
 
-Requiere:
-
-1. AML compatible con GTA San Andreas Android 2.00.
-2. BASSMod de AndroidModLoader, que proporciona la interfaz de reproducción de audio `BASS`.
-
-BASSMod es un complemento separado y no va incluido dentro de `libPersonalRadio.so`.
+Requiere AML compatible con GTA San Andreas Android 2.00. El paquete compilado incluye también `libBASSMod.so`, la dependencia de audio de AndroidModLoader, para que ambas bibliotecas puedan instalarse juntas. AML debe estar instalado por separado.
 
 ## Compilación
 
@@ -32,8 +27,8 @@ El workflow de GitHub Actions compila el proyecto sin costo y genera `PERSONAL_R
 ## Instalación de prueba
 
 1. Descomprime `PERSONAL_RADIO_ANDROID.zip`.
-2. Copia `libPersonalRadio.so` en la carpeta `mods` de AML para `com.rockstargames.gtasa`.
-3. Comprueba que AML y BASSMod estén instalados y activos.
+2. Copia `libPersonalRadio.so` y `libBASSMod.so` directamente en la carpeta `mods` de AML para `com.rockstargames.gtasa`.
+3. Comprueba que AML esté instalado y activo.
 4. Inicia el juego, entra en un vehículo y usa las cuatro zonas de la parte superior de la pantalla.
 
 No instales este archivo como APK. Es un complemento nativo `.so` para AML. La compilación correcta tampoco garantiza compatibilidad funcional: hay que probar su carga y la lectura de música en el dispositivo.
