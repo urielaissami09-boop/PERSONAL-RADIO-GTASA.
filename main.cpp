@@ -3,7 +3,9 @@
 #include <mod/config.h>
 
 #include <Events.h>
+#include <engine/Font.h>
 #include <engine/RsGlobal.h>
+#include <entity/PlayerPed.h>
 #include <base/Timer.h>
 #include "ibass.h"
 
@@ -21,7 +23,7 @@
 #include <thread>
 #include <vector>
 
-MYMODCFG(net.kronos.gtasa.personalradio, PERSONAL RADIO, 0.3.3, Kronos)
+MYMODCFG(net.kronos.gtasa.personalradio, PERSONAL RADIO, 0.3.4, Kronos)
 NEEDGAME(com.rockstargames.gtasa)
 BEGIN_DEPLIST()
     ADD_DEPENDENCY(net.rusjj.basslib)
@@ -268,6 +270,31 @@ namespace PersonalRadio
         }
     }
 
+    static void DrawOverlay()
+    {
+        // No consultar el vehiculo desde el callback de dibujo.
+        // Se muestra siempre para confirmar visualmente que el mod esta cargado.
+        char line[256];
+        {
+            std::lock_guard<std::mutex> lock(stateMutex);
+            std::snprintf(line, sizeof(line), "PERSONAL RADIO [%s]  |  << PREV  |  %s  |  NEXT >>\\n%s",
+                enabled ? "ON" : "OFF", paused ? "PLAY" : "PAUSE", currentTitle.c_str());
+        }
+
+        GxtChar text[256]{};
+        AsciiToGxtChar(line, text);
+        const float scale = static_cast<float>(RsGlobal.maximumHeight) / 540.0f;
+        CFont::SetScale(scale * 0.78f);
+        CFont::SetColor(CRGBA(255, 255, 255, 255));
+        CFont::SetFontStyle(FO_FONT_STYLE_HEADING);
+        CFont::SetEdge(1);
+        CFont::SetOrientation(ALIGN_CENTER);
+        CFont::SetProportional(1);
+        CFont::SetBackground(0, 1);
+        CFont::PrintString(0.5f * RsGlobal.maximumWidth, 0.035f * RsGlobal.maximumHeight, text);
+        CFont::RenderFontBuffer();
+    }
+
     static void HandleTouch(int type, int /*finger*/, int x, int y)
     {
         // Evita consultar el vehiculo desde callbacks de entrada o render.
@@ -321,13 +348,14 @@ ON_MOD_LOAD()
     if (PersonalRadio::volume < 0.0f) PersonalRadio::volume = 0.0f;
     if (PersonalRadio::volume > 1.0f) PersonalRadio::volume = 1.0f;
 
+    Events::drawHudEvent.after += []() { PersonalRadio::DrawOverlay(); };
     Events::touchScreenEvent.after += [](int type, int finger, int x, int y)
     {
         PersonalRadio::HandleTouch(type, finger, x, y);
     };
     Events::processScriptsEvent += []() { PersonalRadio::OnFrame(); };
 
-    logger->Info("PERSONAL RADIO 0.3.3 cargado. Controles tactiles en los cuatro sectores superiores.");
+    logger->Info("PERSONAL RADIO 0.3.4 cargado. Indicador visible y controles tactiles superiores.");
 }
 
 ON_MOD_UNLOAD()
